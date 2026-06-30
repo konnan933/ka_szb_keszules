@@ -2,6 +2,31 @@ import { useState, useEffect } from "react";
 import { TETELEK_DATA } from "./data/tetelekData";
 import type { Topic } from "./data/tetelekData";
 import { getRenderedMarkdown, hasMarkdown } from "./content/tetelekContent";
+import { KIKERDEZO } from "./data/kikerdezo";
+
+// Véletlen kvíz: egy kérdés a teljes (minden tételt lefedő) bankból, a tétel azonosítójával
+interface RandomQ {
+  topicId: number;
+  q: string;
+  options: string[];
+  correct: number;
+  explanation: string;
+}
+
+// n darab véletlen kérdés az ÖSSZES tétel összes kérdéséből (Fisher–Yates keverés)
+function buildRandomQuiz(n: number): RandomQ[] {
+  const pool: RandomQ[] = [];
+  for (const [id, questions] of Object.entries(KIKERDEZO)) {
+    for (const q of questions) {
+      pool.push({ topicId: Number(id), ...q });
+    }
+  }
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, n);
+}
 
 // Badge Interface
 interface Badge {
@@ -122,9 +147,9 @@ function OralQuestionCard({ q, idx, topicId }: OralQuestionCardProps) {
 
 export default function App() {
   // Navigation State
-  const [activePage, setActivePage] = useState<"study" | "simulator" | "dashboard">("study");
+  const [activePage, setActivePage] = useState<"study" | "simulator" | "dashboard" | "randomquiz">("study");
   const [selectedTopicId, setSelectedTopicId] = useState<number>(1);
-  const [activeTab, setActiveTab] = useState<"summary" | "full" | "quiz" | "oral" | "flashcard">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "full" | "quiz" | "oral" | "flashcard" | "exam">("summary");
 
   // User Stats State
   const [xp, setXp] = useState<number>(() => {
@@ -164,6 +189,20 @@ export default function App() {
   // Flashcards State
   const [currentCardIndex, setCurrentCardIndex] = useState<number>(0);
   const [cardFlipped, setCardFlipped] = useState<boolean>(false);
+
+  // Kikérdező (per-tétel, pontonkénti kvíz) State
+  const [examIndex, setExamIndex] = useState<number>(0);
+  const [examSelected, setExamSelected] = useState<number | null>(null);
+  const [examSubmitted, setExamSubmitted] = useState<boolean>(false);
+  const [examScore, setExamScore] = useState<number>(0);
+
+  // Véletlen 20 kérdéses kvíz (minden tételből) State
+  const [rqList, setRqList] = useState<RandomQ[]>([]);
+  const [rqIndex, setRqIndex] = useState<number>(0);
+  const [rqSelected, setRqSelected] = useState<number | null>(null);
+  const [rqSubmitted, setRqSubmitted] = useState<boolean>(false);
+  const [rqScore, setRqScore] = useState<number>(0);
+  const [rqStarted, setRqStarted] = useState<boolean>(false);
 
   // Simulator State
   const [simState, setSimState] = useState<"idle" | "drawing" | "question" | "reveal" | "feedback">("idle");
@@ -244,8 +283,16 @@ export default function App() {
     }
   };
 
+  // Reset a kikérdező az elejére
+  const resetExam = () => {
+    setExamIndex(0);
+    setExamSelected(null);
+    setExamSubmitted(false);
+    setExamScore(0);
+  };
+
   // Handle tab switching resets
-  const handleTabChange = (tab: "summary" | "full" | "quiz" | "oral" | "flashcard") => {
+  const handleTabChange = (tab: "summary" | "full" | "quiz" | "oral" | "flashcard" | "exam") => {
     setActiveTab(tab);
     if (tab === "quiz") {
       setSelectedAnswer(null);
@@ -253,11 +300,14 @@ export default function App() {
     } else if (tab === "flashcard") {
       setCurrentCardIndex(0);
       setCardFlipped(false);
+    } else if (tab === "exam") {
+      resetExam();
     }
   };
 
   const handleTopicChange = (topicId: number) => {
     setSelectedTopicId(topicId);
+    resetExam();
     handleTabChange("summary");
   };
 
@@ -307,6 +357,51 @@ export default function App() {
         setCurrentCardIndex(0);
       }
     }, 200);
+  };
+
+  // Kikérdező kezelők
+  const examQuestions = KIKERDEZO[selectedTopicId] || [];
+
+  const handleExamAnswer = (idx: number) => {
+    if (examSubmitted) return;
+    setExamSelected(idx);
+    setExamSubmitted(true);
+    if (idx === examQuestions[examIndex].correct) {
+      setExamScore((s) => s + 1);
+      setXp((prev) => prev + 5); // helyes válasz: +5 XP
+    }
+  };
+
+  const handleExamNext = () => {
+    setExamSubmitted(false);
+    setExamSelected(null);
+    setExamIndex((i) => i + 1);
+  };
+
+  // Véletlen 20 kérdéses kvíz kezelők
+  const startRandomQuiz = () => {
+    setRqList(buildRandomQuiz(20));
+    setRqIndex(0);
+    setRqSelected(null);
+    setRqSubmitted(false);
+    setRqScore(0);
+    setRqStarted(true);
+  };
+
+  const handleRqAnswer = (idx: number) => {
+    if (rqSubmitted) return;
+    setRqSelected(idx);
+    setRqSubmitted(true);
+    if (idx === rqList[rqIndex].correct) {
+      setRqScore((s) => s + 1);
+      setXp((prev) => prev + 5); // helyes válasz: +5 XP
+    }
+  };
+
+  const handleRqNext = () => {
+    setRqSubmitted(false);
+    setRqSelected(null);
+    setRqIndex((i) => i + 1);
   };
 
   // Simulator Actions
@@ -423,6 +518,15 @@ export default function App() {
         {/* Navigation buttons at bottom */}
         <div className="sidebar-footer">
           <button
+            className={`nav-button ${activePage === "randomquiz" ? "active" : ""}`}
+            onClick={() => {
+              setActivePage("randomquiz");
+              setRqStarted(false);
+            }}
+          >
+            🎲 Véletlen 20 kérdés
+          </button>
+          <button
             className={`nav-button ${activePage === "simulator" ? "active" : ""}`}
             onClick={() => setActivePage("simulator")}
           >
@@ -481,6 +585,12 @@ export default function App() {
                 onClick={() => handleTabChange("flashcard")}
               >
                 ⚡ 5. Aktív Felidézés
+              </button>
+              <button
+                className={`tab-btn ${activeTab === "exam" ? "active" : ""}`}
+                onClick={() => handleTabChange("exam")}
+              >
+                📝 6. Kikérdező
               </button>
             </div>
 
@@ -680,6 +790,106 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* Kikérdező Tab – pontonkénti kvíz a tétel minden pontjából */}
+              {activeTab === "exam" && (
+                <div className="exam-container">
+                  {examQuestions.length === 0 ? (
+                    <p className="text-secondary">Ehhez a tételhez még nincs kikérdező.</p>
+                  ) : examIndex >= examQuestions.length ? (
+                    <div className="exam-result-card">
+                      <div className="exam-result-icon">
+                        {examScore === examQuestions.length
+                          ? "🏆"
+                          : examScore >= examQuestions.length * 0.6
+                          ? "🎉"
+                          : "📚"}
+                      </div>
+                      <h3 className="exam-result-title">Kikérdező kész!</h3>
+                      <p className="exam-result-score">
+                        {examScore} / {examQuestions.length} helyes
+                        <span className="exam-result-pct">
+                          {" "}({Math.round((examScore / examQuestions.length) * 100)}%)
+                        </span>
+                      </p>
+                      <p className="text-secondary" style={{ marginBottom: "20px" }}>
+                        {examScore === examQuestions.length
+                          ? "Tökéletes! Ezt a tételt minden pontjában tudod."
+                          : examScore >= examQuestions.length * 0.6
+                          ? "Szép munka! Nézd át a hibás pontokat a Teljes kidolgozás fülön."
+                          : "Még gyakorolj – olvasd át a Teljes kidolgozás fület, majd próbáld újra!"}
+                      </p>
+                      <button className="sim-start-btn" onClick={resetExam}>
+                        🔄 Újrakezdés
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="exam-card">
+                      <div className="exam-progress-row">
+                        <span className="exam-progress-label">
+                          Kérdés {examIndex + 1} / {examQuestions.length}
+                        </span>
+                        <span className="exam-score-label">✔️ {examScore} pont</span>
+                      </div>
+                      <div className="exam-progress-bar">
+                        <div
+                          className="exam-progress-fill"
+                          style={{ width: `${(examIndex / examQuestions.length) * 100}%` }}
+                        ></div>
+                      </div>
+
+                      <h3 className="exam-question">{examQuestions[examIndex].q}</h3>
+                      <div className="quiz-options">
+                        {examQuestions[examIndex].options.map((option, idx) => {
+                          let btnClass = "";
+                          if (examSubmitted) {
+                            if (idx === examQuestions[examIndex].correct) btnClass = "correct";
+                            else if (idx === examSelected) btnClass = "wrong";
+                          } else if (examSelected === idx) {
+                            btnClass = "selected";
+                          }
+                          return (
+                            <button
+                              key={idx}
+                              className={`quiz-option-btn ${btnClass}`}
+                              disabled={examSubmitted}
+                              onClick={() => handleExamAnswer(idx)}
+                            >
+                              {option}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {examSubmitted && (
+                        <div className="quiz-feedback">
+                          <div
+                            className={`quiz-feedback-title ${
+                              examSelected === examQuestions[examIndex].correct ? "correct" : "wrong"
+                            }`}
+                          >
+                            {examSelected === examQuestions[examIndex].correct
+                              ? "🎉 Helyes! (+5 XP)"
+                              : "❌ Nem talált."}
+                          </div>
+                          <div className="quiz-feedback-text">
+                            {examQuestions[examIndex].explanation}
+                          </div>
+                          <button
+                            className="sim-start-btn"
+                            style={{ marginTop: "16px" }}
+                            onClick={handleExamNext}
+                          >
+                            {examIndex === examQuestions.length - 1
+                              ? "🏁 Eredmény megtekintése"
+                              : "Következő kérdés ▶"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -807,6 +1017,114 @@ export default function App() {
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Véletlen 20 kérdéses kvíz (minden tételből) */}
+        {activePage === "randomquiz" && (
+          <div className="simulator-container">
+            <header className="content-header" style={{ textAlign: "center" }}>
+              <div className="topic-badge-pill">🎲 Véletlen kvíz</div>
+              <h2 className="content-title">20 véletlen kérdés</h2>
+              <p className="text-secondary" style={{ fontSize: "0.95rem" }}>
+                Vegyes kikérdező mind a 16 tétel teljes kérdésbankjából (150 kérdés). Minden indításnál 20 új, véletlenszerű kérdést kapsz.
+              </p>
+            </header>
+
+            {!rqStarted ? (
+              <div className="exam-result-card">
+                <div className="exam-result-icon">🎲</div>
+                <h3 className="exam-result-title">Készen állsz?</h3>
+                <p className="text-secondary" style={{ marginBottom: "20px" }}>
+                  20 véletlen kérdés a teljes anyagból, vegyesen. Helyes válaszonként +5 XP.
+                </p>
+                <button className="sim-start-btn" onClick={startRandomQuiz}>
+                  🚀 Kvíz indítása
+                </button>
+              </div>
+            ) : rqIndex >= rqList.length ? (
+              <div className="exam-result-card">
+                <div className="exam-result-icon">
+                  {rqScore >= 18 ? "🏆" : rqScore >= 12 ? "🎉" : "📚"}
+                </div>
+                <h3 className="exam-result-title">Kvíz kész!</h3>
+                <p className="exam-result-score">
+                  {rqScore} / {rqList.length} helyes
+                  <span className="exam-result-pct">
+                    {" "}({Math.round((rqScore / rqList.length) * 100)}%)
+                  </span>
+                </p>
+                <p className="text-secondary" style={{ marginBottom: "20px" }}>
+                  {rqScore >= 18
+                    ? "Kiváló! Stabilan tudod az anyagot."
+                    : rqScore >= 12
+                    ? "Jó úton jársz – ismételd át a gyengébb témákat."
+                    : "Még gyakorolj – használd a tételenkénti Kikérdezőt és a Teljes kidolgozást!"}
+                </p>
+                <button className="sim-start-btn" onClick={startRandomQuiz}>
+                  🔄 Új 20 kérdés
+                </button>
+              </div>
+            ) : (
+              <div className="exam-card">
+                <div className="exam-progress-row">
+                  <span className="exam-progress-label">
+                    Kérdés {rqIndex + 1} / {rqList.length}
+                  </span>
+                  <span className="exam-score-label">✔️ {rqScore} pont</span>
+                </div>
+                <div className="exam-progress-bar">
+                  <div
+                    className="exam-progress-fill"
+                    style={{ width: `${(rqIndex / rqList.length) * 100}%` }}
+                  ></div>
+                </div>
+
+                <span className="rq-topic-badge">{rqList[rqIndex].topicId}. tétel</span>
+                <h3 className="exam-question">{rqList[rqIndex].q}</h3>
+                <div className="quiz-options">
+                  {rqList[rqIndex].options.map((option, idx) => {
+                    let btnClass = "";
+                    if (rqSubmitted) {
+                      if (idx === rqList[rqIndex].correct) btnClass = "correct";
+                      else if (idx === rqSelected) btnClass = "wrong";
+                    } else if (rqSelected === idx) {
+                      btnClass = "selected";
+                    }
+                    return (
+                      <button
+                        key={idx}
+                        className={`quiz-option-btn ${btnClass}`}
+                        disabled={rqSubmitted}
+                        onClick={() => handleRqAnswer(idx)}
+                      >
+                        {option}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {rqSubmitted && (
+                  <div className="quiz-feedback">
+                    <div
+                      className={`quiz-feedback-title ${
+                        rqSelected === rqList[rqIndex].correct ? "correct" : "wrong"
+                      }`}
+                    >
+                      {rqSelected === rqList[rqIndex].correct ? "🎉 Helyes! (+5 XP)" : "❌ Nem talált."}
+                    </div>
+                    <div className="quiz-feedback-text">{rqList[rqIndex].explanation}</div>
+                    <button
+                      className="sim-start-btn"
+                      style={{ marginTop: "16px" }}
+                      onClick={handleRqNext}
+                    >
+                      {rqIndex === rqList.length - 1 ? "🏁 Eredmény megtekintése" : "Következő kérdés ▶"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

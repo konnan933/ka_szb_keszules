@@ -1448,3 +1448,103 @@ body {
   border-top: 1px solid var(--border-glass);
   margin: 28px 0;
 }
+
+/* ===== 6. Kikérdező – pontonkénti kvíz ===== */
+.exam-container {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.exam-card,
+.exam-result-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+  padding: 32px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.exam-progress-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+
+.exam-progress-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.exam-score-label {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.exam-progress-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.exam-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  border-radius: 99px;
+  transition: width var(--transition-normal);
+}
+
+.exam-question {
+  font-family: var(--font-heading);
+  font-size: 1.2rem;
+  color: #fff;
+  line-height: 1.5;
+  margin-bottom: 22px;
+}
+
+/* Eredmény kártya */
+.exam-result-card {
+  text-align: center;
+}
+
+.exam-result-icon {
+  font-size: 3.5rem;
+  margin-bottom: 8px;
+}
+
+.exam-result-title {
+  font-family: var(--font-heading);
+  font-size: 1.5rem;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.exam-result-score {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--primary-light);
+  margin-bottom: 4px;
+}
+
+.exam-result-pct {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* Véletlen kvíz: melyik tételből jött a kérdés */
+.rq-topic-badge {
+  display: inline-block;
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: var(--secondary);
+  padding: 3px 12px;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
