@@ -28,6 +28,97 @@ function buildRandomQuiz(n: number): RandomQ[] {
   return pool.slice(0, n);
 }
 
+// ===== Szóbeli felelet automatikus értékelése (kulcsszó-alapú heurisztika) =====
+// Magyar töltelékszavak, amelyeket nem tekintünk kulcsfogalomnak
+const HU_STOP = new Set([
+  "egy", "az", "ami", "amit", "amely", "amelyek", "amelyet", "amelynek", "aki", "akit",
+  "ahol", "amikor", "ahogy", "illetve", "valamint", "tehat", "ezert", "azert", "pedig",
+  "viszont", "azonban", "majd", "utan", "elott", "kozben", "lehet", "lehetove", "kell",
+  "kellene", "kapott", "soran", "mivel", "ahhoz", "minden", "mindig", "kozott", "alapjan",
+  "eseten", "esetben", "esetében", "szerint", "peldaul", "tipikusan", "altalaban", "gyakran",
+  "sajat", "ezaltal", "akkor", "amennyiben", "valo", "lesz", "volt", "van", "vannak", "legyen",
+  "tudja", "tudjuk", "fogja", "egyik", "masik", "tobb", "keves", "nagy", "kicsi", "ilyen",
+  "olyan", "ennyi", "annyi", "neki", "nekunk", "veluk", "hozza", "rola", "arrol", "errol",
+  "benne", "abban", "ebben", "ezen", "azon", "mind", "mindket", "mindkettő", "mindegyik",
+  "osszes", "nehany", "ezzel", "azzal", "ezek", "azok", "ennek", "annak", "tehát", "vagy",
+  "hogy", "mert", "nem", "sem", "mint", "csak", "ezt", "azt", "igy", "ugyanaz", "ugyanúgy",
+  "szukseges", "szukseg", "kepes", "tortenik", "torténik", "celja", "felelos", "kulonbozo",
+]);
+
+function normWord(w: string): string {
+  return w
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // diakritikus jelek eltávolítása (á→a, ő→o...)
+    .replace(/[^a-z0-9#]/g, "");
+}
+
+function cleanWord(w: string): string {
+  return w.replace(/^[^0-9A-Za-zÀ-ÿ#]+|[^0-9A-Za-zÀ-ÿ#]+$/g, "");
+}
+
+// A mintaválaszból kinyeri a legjellemzőbb kulcsszavakat (max 14, leghosszabbak)
+function extractKeywords(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of text.split(/\s+/)) {
+    const norm = normWord(raw);
+    if (norm.length < 5) continue;
+    if (HU_STOP.has(norm)) continue;
+    if (/^\d+$/.test(norm)) continue;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(cleanWord(raw));
+  }
+  out.sort((a, b) => normWord(b).length - normWord(a).length);
+  return out.slice(0, 14);
+}
+
+interface SimEvalResult {
+  grade: number;
+  coverage: number;
+  matched: string[];
+  missing: string[];
+}
+
+function evaluateOralAnswer(userText: string, modelAnswer: string): SimEvalResult {
+  const keywords = extractKeywords(modelAnswer);
+  const userJoined = " " + userText.split(/\s+/).map(normWord).filter(Boolean).join(" ") + " ";
+  const matched: string[] = [];
+  const missing: string[] = [];
+  for (const disp of keywords) {
+    const k = normWord(disp);
+    const stem = k.slice(0, Math.max(5, Math.round(k.length * 0.7))); // egyszerű szótő-egyezés
+    if (userJoined.includes(k) || userJoined.includes(stem)) matched.push(disp);
+    else missing.push(disp);
+  }
+  const coverage = keywords.length ? matched.length / keywords.length : 0;
+  const wordCount = userText.trim() ? userText.trim().split(/\s+/).length : 0;
+
+  let grade: number;
+  if (wordCount < 4) grade = 1;
+  else if (coverage >= 0.7) grade = 5;
+  else if (coverage >= 0.5) grade = 4;
+  else if (coverage >= 0.33) grade = 3;
+  else if (coverage >= 0.18) grade = 2;
+  else grade = 1;
+  if (wordCount < 12 && grade > 3) grade = 3; // túl rövid felelet nem érhet jelest/jót
+
+  return { grade, coverage, matched, missing };
+}
+
+function gradeLabel(g: number): string {
+  return g === 5
+    ? "Jeles (5)"
+    : g === 4
+    ? "Jó (4)"
+    : g === 3
+    ? "Közepes (3)"
+    : g === 2
+    ? "Elégséges (2)"
+    : "Elégtelen (1)";
+}
+
 // Badge Interface
 interface Badge {
   id: string;
@@ -209,7 +300,7 @@ export default function App() {
   const [simTopic, setSimTopic] = useState<Topic | null>(null);
   const [simQuestion, setSimQuestion] = useState<{ question: string; answer: string } | null>(null);
   const [userWrittenAnswer, setUserWrittenAnswer] = useState<string>("");
-  const [chosenGrade, setChosenGrade] = useState<number | null>(null);
+  const [simEval, setSimEval] = useState<SimEvalResult | null>(null);
 
   // Load and update active topic data
   const currentTopic = TETELEK_DATA.find((t) => t.id === selectedTopicId) || TETELEK_DATA[0];
@@ -408,7 +499,7 @@ export default function App() {
   const startSimulatorSession = () => {
     setSimState("drawing");
     setUserWrittenAnswer("");
-    setChosenGrade(null);
+    setSimEval(null);
 
     // Simulated delay for drawing a topic
     setTimeout(() => {
@@ -421,15 +512,18 @@ export default function App() {
     }, 1500);
   };
 
-  const handleSimulatorEvaluate = (grade: number) => {
-    setChosenGrade(grade);
-    setSimGrades((prev) => [...prev, grade]);
+  // A beírt felelet automatikus értékelése (kulcsszó-lefedettség alapján)
+  const submitSimulatorAnswer = () => {
+    if (!simQuestion) return;
+    const result = evaluateOralAnswer(userWrittenAnswer, simQuestion.answer);
+    setSimEval(result);
+    setSimGrades((prev) => [...prev, result.grade]);
 
     let xpGain = 0;
-    if (grade === 5) xpGain = 150;
-    else if (grade === 4) xpGain = 100;
-    else if (grade === 3) xpGain = 50;
-    else if (grade === 2) xpGain = 20;
+    if (result.grade === 5) xpGain = 150;
+    else if (result.grade === 4) xpGain = 100;
+    else if (result.grade === 3) xpGain = 50;
+    else if (result.grade === 2) xpGain = 20;
 
     setXp((prev) => prev + xpGain);
     setSimState("feedback");
@@ -941,77 +1035,79 @@ export default function App() {
                     <>
                       <textarea
                         className="user-answer-input"
-                        placeholder="Gépeld be a kulcsszavakat, vázlatodat vagy a teljes feleletedet ide..."
+                        placeholder="Gépeld be a feleletedet vagy a kulcsszavakat, vázlatot ide – az értékelés ezt elemzi..."
                         value={userWrittenAnswer}
                         onChange={(e) => setUserWrittenAnswer(e.target.value)}
                       />
                       <button
                         className="sim-start-btn"
                         style={{ background: "linear-gradient(135deg, var(--secondary), #0891b2)" }}
-                        onClick={() => setSimState("reveal")}
+                        onClick={submitSimulatorAnswer}
+                        disabled={!userWrittenAnswer.trim()}
                       >
-                        🔍 Felelet befejezése & Válaszvázlat megnyitása
+                        🤖 Felelet beküldése és automatikus értékelés
                       </button>
                     </>
                   )}
 
-                  {(simState === "reveal" || simState === "feedback") && (
+                  {simState === "feedback" && simEval && (
                     <div className="criteria-section">
-                      <div className="criteria-title">Hivatalos BME Értékelőlap</div>
-                      <p className="text-secondary" style={{ fontSize: "0.85rem", marginBottom: "16px" }}>
-                        Hasonlítsd össze az elmondott/leírt válaszodat a vizsgakövetelményekkel:
-                      </p>
+                      <div className="criteria-title">Automatikus értékelés</div>
 
-                      <div className="criteria-list">
-                        <div className="criteria-item">
-                          <div className="grade-badge grade-5">Jeles (5) szint</div>
-                          <div className="criteria-content">{simQuestion.answer}</div>
-                        </div>
-                        <div className="criteria-item">
-                          <div className="grade-badge grade-3">Közepes (3) szint</div>
-                          <div className="criteria-content">
-                            A fogalmat nagyjából ismeri, de hiányoznak a pontos részletek és a mélyebb architektúrális megértés.
+                      <div className="auto-eval-result">
+                        <div className={`auto-grade-circle g${simEval.grade}`}>{simEval.grade}</div>
+                        <div className="auto-eval-meta">
+                          <div className="auto-eval-grade-label">{gradeLabel(simEval.grade)}</div>
+                          <div className="auto-eval-coverage">
+                            Kulcsszó-lefedettség: <strong>{Math.round(simEval.coverage * 100)}%</strong>{" "}
+                            ({simEval.matched.length}/{simEval.matched.length + simEval.missing.length} fogalom)
                           </div>
                         </div>
                       </div>
 
-                      {simState === "reveal" && (
-                        <div className="grade-selector">
-                          <span className="eval-label">Értékeld a feleletedet a fenti szempontok alapján:</span>
-                          <div className="grade-btn-row">
-                            <button className="grade-btn g5" onClick={() => handleSimulatorEvaluate(5)}>
-                              Jeles (5)
-                            </button>
-                            <button className="grade-btn" style={{ borderColor: "rgba(6, 182, 212, 0.3)" }} onClick={() => handleSimulatorEvaluate(4)}>
-                              Jó (4)
-                            </button>
-                            <button className="grade-btn" style={{ borderColor: "rgba(245, 158, 11, 0.3)" }} onClick={() => handleSimulatorEvaluate(3)}>
-                              Közepes (3)
-                            </button>
-                            <button className="grade-btn g2" onClick={() => handleSimulatorEvaluate(2)}>
-                              Elégséges (2) / Elégtelen (1)
-                            </button>
-                          </div>
+                      <div className="kw-block">
+                        <div className="kw-label kw-label-hit">✅ Megvolt</div>
+                        <div className="kw-chips">
+                          {simEval.matched.length ? (
+                            simEval.matched.map((k, i) => (
+                              <span key={i} className="kw-chip kw-hit">{k}</span>
+                            ))
+                          ) : (
+                            <span className="text-secondary" style={{ fontSize: "0.85rem" }}>—</span>
+                          )}
                         </div>
-                      )}
+                      </div>
+                      <div className="kw-block">
+                        <div className="kw-label kw-label-miss">⚠️ Ezekre még térj ki</div>
+                        <div className="kw-chips">
+                          {simEval.missing.length ? (
+                            simEval.missing.map((k, i) => (
+                              <span key={i} className="kw-chip kw-miss">{k}</span>
+                            ))
+                          ) : (
+                            <span className="text-secondary" style={{ fontSize: "0.85rem" }}>Minden kulcsfogalom megvolt! 🎉</span>
+                          )}
+                        </div>
+                      </div>
 
-                      {simState === "feedback" && chosenGrade !== null && (
-                        <div className="quiz-feedback" style={{ marginTop: "24px", textAlign: "center" }}>
-                          <div className="quiz-feedback-title correct" style={{ justifyContent: "center" }}>
-                            🎉 Felelet elmentve! Osztályzat: {chosenGrade}
-                          </div>
-                          <p className="quiz-feedback-text">
-                            A feleletért kapott XP sikeresen jóváírva az egyenlegeden. Folytasd a felkészülést!
-                          </p>
-                          <button
-                            className="sim-start-btn"
-                            style={{ marginTop: "16px" }}
-                            onClick={() => setSimState("idle")}
-                          >
-                            🔄 Következő vizsgázó / Új tétel húzása
-                          </button>
+                      <p className="auto-eval-note">
+                        ⓘ Az értékelés kulcsszó-alapú becslés, nem a tartalmi megértést méri – mindig vesd össze a mintaválasszal!
+                      </p>
+
+                      <div className="criteria-list" style={{ marginTop: "8px" }}>
+                        <div className="criteria-item">
+                          <div className="grade-badge grade-5">Mintaválasz (Jeles 5 szint)</div>
+                          <div className="criteria-content">{simQuestion.answer}</div>
                         </div>
-                      )}
+                      </div>
+
+                      <button
+                        className="sim-start-btn"
+                        style={{ marginTop: "20px" }}
+                        onClick={() => setSimState("idle")}
+                      >
+                        🔄 Következő vizsgázó / Új tétel húzása
+                      </button>
                     </div>
                   )}
                 </>
